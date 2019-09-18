@@ -17,7 +17,7 @@ INC += -I$(RPATH)/libs/include/UsageEnvironment
 LIB += -L$(RPATH)/libs/lib
 CFLAGS += -lliveMedia -lgroupsock -lBasicUsageEnvironment -lUsageEnvironment
 
-demo:
+target:
 	@$(CXX) -O3 -Wall -o demo $(RPATH)/rtsp_to_h264.cpp $(INC) $(LIB) $(CFLAGS)
 
 live555:

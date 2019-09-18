@@ -529,6 +529,11 @@ void DummySink::afterGettingFrame(void* clientData, unsigned frameSize, unsigned
 static bool firstFrame = true;
 static char tar_file_name[64] = "test.26x";
 
+#define ADD_HEAD 1 //每帧数据开头自动补上{0x00, 0x00, 0x00, 0x01}
+#if(ADD_HEAD)
+#define ADD_FIRST_HEAD 0 //文件开始时自动补上vps,sps,pps帧
+#endif
+
 void DummySink::afterGettingFrame(
     unsigned frameSize, 
     unsigned numTruncatedBytes,
@@ -566,45 +571,49 @@ void DummySink::afterGettingFrame(
       
       if(strstr(fSubsession.codecName(), "265"))
       {
-        // const char *vps = fSubsession.fmtp_spropvps();
-        // const char *sps = fSubsession.fmtp_spropsps();
-        // const char *pps = fSubsession.fmtp_sproppps();
         strcpy(tar_file_name, "test.265");
         FILE *fp = fopen(tar_file_name, "w");
+#if(ADD_FIRST_HEAD)
+        const char *vps = fSubsession.fmtp_spropvps();
+        const char *sps = fSubsession.fmtp_spropsps();
+        const char *pps = fSubsession.fmtp_sproppps();
+        if(fp && vps && sps && pps)
+        {
+          fwrite(start_code, 4, 1, fp);
+          fwrite(vps, strlen(vps), 1, fp);
+          fwrite(start_code, 4, 1, fp);
+          fwrite(sps, strlen(sps), 1, fp);
+          fwrite(start_code, 4, 1, fp);
+          fwrite(pps, strlen(pps), 1, fp);
+          fclose(fp);
+        }
+#else
         if(fp)
           fclose(fp);
-        // if(fp && vps && sps && pps)
-        // {
-        //   fwrite(start_code, 4, 1, fp);
-        //   fwrite(vps, strlen(vps), 1, fp);
-        //   fwrite(start_code, 4, 1, fp);
-        //   fwrite(sps, strlen(sps), 1, fp);
-        //   fwrite(start_code, 4, 1, fp);
-        //   fwrite(pps, strlen(pps), 1, fp);
-        //   fclose(fp);
-        // }
-        // fp = NULL;
+#endif
+        fp = NULL;
       }
       else if(strstr(fSubsession.codecName(), "264"))
       {
-        // unsigned int num;
-        // SPropRecord *sps = parseSPropParameterSets(fSubsession.fmtp_spropparametersets(), num);
         strcpy(tar_file_name, "test.264");
         FILE *fp = fopen(tar_file_name, "w");
+#if(ADD_FIRST_HEAD)
+        unsigned int num;
+        SPropRecord *sps = parseSPropParameterSets(fSubsession.fmtp_spropparametersets(), num);
+        if(fp && sps)
+        {
+          fwrite(start_code, 4, 1, fp);
+          fwrite(sps[0].sPropBytes, sps[0].sPropLength, 1, fp);
+          fwrite(start_code, 4, 1, fp);
+          fwrite(sps[1].sPropBytes, sps[1].sPropLength, 1, fp);
+          fclose(fp);
+          delete [] sps;
+        }
+#else
         if(fp)
           fclose(fp);
-        // FILE *fp = fopen(tar_file_name, "a+b");
-
-        // if(fp && sps)
-        // {
-        //   fwrite(start_code, 4, 1, fp);
-        //   fwrite(sps[0].sPropBytes, sps[0].sPropLength, 1, fp);
-        //   fwrite(start_code, 4, 1, fp);
-        //   fwrite(sps[1].sPropBytes, sps[1].sPropLength, 1, fp);
-        //   fclose(fp);
-        //   delete [] sps;
-        // }
-        // fp = NULL;
+#endif
+        fp = NULL;
       }
       firstFrame = False;
     }
@@ -613,7 +622,9 @@ void DummySink::afterGettingFrame(
     FILE *fp = fopen(tar_file_name, "a+b");
     if(fp)
     {
+#if(ADD_HEAD)
       fwrite(head, 4, 1, fp);
+#endif
       fwrite(fReceiveBuffer, frameSize, 1, fp);
       fclose(fp);
       fp = NULL;
