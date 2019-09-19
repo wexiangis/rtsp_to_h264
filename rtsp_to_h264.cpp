@@ -56,44 +56,6 @@ UsageEnvironment& operator<<(UsageEnvironment& env, const MediaSubsession& subse
   return env << subsession.mediumName() << "/" << subsession.codecName();
 }
 
-void usage(UsageEnvironment& env, char const* progName) {
-  env << "Usage: " << progName << " <rtsp-url-1> ... <rtsp-url-N>\n";
-  env << "\t(where each <rtsp-url-i> is a \"rtsp://\" URL)\n";
-}
-
-char eventLoopWatchVariable = 0;
-
-int main(int argc, char** argv) {
-  // Begin by setting up our usage environment:
-  TaskScheduler* scheduler = BasicTaskScheduler::createNew();
-  UsageEnvironment* env = BasicUsageEnvironment::createNew(*scheduler);
-
-  // We need at least one "rtsp://" URL argument:
-  if (argc < 2) {
-    usage(*env, argv[0]);
-    return 1;
-  }
-
-  // There are argc-1 URLs: argv[1] through argv[argc-1].  Open and start streaming each one:
-  for (int i = 1; i <= argc-1; ++i) {
-    openURL(*env, argv[0], argv[i]);
-  }
-
-  // All subsequent activity takes place within the event loop:
-  env->taskScheduler().doEventLoop(&eventLoopWatchVariable);
-    // This function call does not return, unless, at some point in time, "eventLoopWatchVariable" gets set to something non-zero.
-
-  return 0;
-
-  // If you choose to continue the application past this point (i.e., if you comment out the "return 0;" statement above),
-  // and if you don't intend to do anything more with the "TaskScheduler" and "UsageEnvironment" objects,
-  // then you can also reclaim the (small) memory used by these objects by uncommenting the following code:
-  /*
-    env->reclaim(); env = NULL;
-    delete scheduler; scheduler = NULL;
-  */
-}
-
 // Define a class to hold per-stream state that we maintain throughout each stream's lifetime:
 
 class StreamClientState {
@@ -476,7 +438,7 @@ StreamClientState::~StreamClientState() {
 
 // Even though we're not going to be doing anything with the incoming data, we still need to receive it.
 // Define the size of the buffer that we'll use:
-#define DUMMY_SINK_RECEIVE_BUFFER_SIZE 100000
+#define DUMMY_SINK_RECEIVE_BUFFER_SIZE 1000000
 
 DummySink* DummySink::createNew(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId) {
   return new DummySink(env, subsession, streamId);
@@ -500,140 +462,6 @@ void DummySink::afterGettingFrame(void* clientData, unsigned frameSize, unsigned
   sink->afterGettingFrame(frameSize, numTruncatedBytes, presentationTime, durationInMicroseconds);
 }
 
-// If you don't want to see debugging output for each received frame, then comment out the following line:
-#define DEBUG_PRINT_EACH_RECEIVED_FRAME 1
-
-// void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes,
-// 				  struct timeval presentationTime, unsigned /*durationInMicroseconds*/) {
-//   // We've just received a frame of data.  (Optionally) print out information about it:
-// #ifdef DEBUG_PRINT_EACH_RECEIVED_FRAME
-//   if (fStreamId != NULL) envir() << "Stream \"" << fStreamId << "\"; ";
-//   envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << ":\tReceived " << frameSize << " bytes";
-//   if (numTruncatedBytes > 0) envir() << " (with " << numTruncatedBytes << " bytes truncated)";
-//   char uSecsStr[6+1]; // used to output the 'microseconds' part of the presentation time
-//   sprintf(uSecsStr, "%06u", (unsigned)presentationTime.tv_usec);
-//   envir() << ".\tPresentation time: " << (int)presentationTime.tv_sec << "." << uSecsStr;
-//   if (fSubsession.rtpSource() != NULL && !fSubsession.rtpSource()->hasBeenSynchronizedUsingRTCP()) {
-//     envir() << "!"; // mark the debugging output to indicate that this presentation time is not RTCP-synchronized
-//   }
-// #ifdef DEBUG_PRINT_NPT
-//   envir() << "\tNPT: " << fSubsession.getNormalPlayTime(presentationTime);
-// #endif
-//   envir() << "\n";
-// #endif
-  
-//   // Then continue, to request the next frame of data:
-//   continuePlaying();
-// }
-
-static bool firstFrame = true;
-static char tar_file_name[64] = "test.26x";
-
-#define ADD_HEAD 1 //每帧数据开头自动补上{0x00, 0x00, 0x00, 0x01}
-#if(ADD_HEAD)
-#define ADD_FIRST_HEAD 0 //文件开始时自动补上vps,sps,pps帧
-#endif
-
-void DummySink::afterGettingFrame(
-    unsigned frameSize, 
-    unsigned numTruncatedBytes,
-    struct timeval presentationTime, 
-    unsigned /*durationInMicroseconds*/)
-{
-  // We've just received a frame of data.  (Optionally) print out information about it:
-#ifdef DEBUG_PRINT_EACH_RECEIVED_FRAME
-  if (fStreamId != NULL) 
-    envir() << "Stream \"" << fStreamId << "\"; ";
-  
-  envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << ":\tReceived " << frameSize << " bytes";
-
-  if (numTruncatedBytes > 0) 
-    envir() << " (with " << numTruncatedBytes << " bytes truncated)";
-  
-  char uSecsStr[6+1]; // used to output the 'microseconds' part of the presentation time
-  sprintf(uSecsStr, "%06u", (unsigned)presentationTime.tv_usec);
-  envir() << ".\tPresentation time: " << (unsigned)presentationTime.tv_sec << "." << uSecsStr;
-  if (fSubsession.rtpSource() != NULL && !fSubsession.rtpSource()->hasBeenSynchronizedUsingRTCP()) {
-    envir() << "!"; // mark the debugging output to indicate that this presentation time is not RTCP-synchronized
-  }
-  envir() << "\n";
-#endif
-  
-  //todo one frame
-  //save to file
-  if(!strcmp(fSubsession.mediumName(), "video"))
-  {
-    if(firstFrame)
-    {
-      // For H.264 video stream, we use a special sink that insert start_codes:
-      // struct timeval tv= {0,0};
-      unsigned char start_code[4] = {0x00, 0x00, 0x00, 0x01};
-      
-      if(strstr(fSubsession.codecName(), "265"))
-      {
-        strcpy(tar_file_name, "test.265");
-        FILE *fp = fopen(tar_file_name, "w");
-#if(ADD_FIRST_HEAD)
-        const char *vps = fSubsession.fmtp_spropvps();
-        const char *sps = fSubsession.fmtp_spropsps();
-        const char *pps = fSubsession.fmtp_sproppps();
-        if(fp && vps && sps && pps)
-        {
-          fwrite(start_code, 4, 1, fp);
-          fwrite(vps, strlen(vps), 1, fp);
-          fwrite(start_code, 4, 1, fp);
-          fwrite(sps, strlen(sps), 1, fp);
-          fwrite(start_code, 4, 1, fp);
-          fwrite(pps, strlen(pps), 1, fp);
-          fclose(fp);
-        }
-#else
-        if(fp)
-          fclose(fp);
-#endif
-        fp = NULL;
-      }
-      else if(strstr(fSubsession.codecName(), "264"))
-      {
-        strcpy(tar_file_name, "test.264");
-        FILE *fp = fopen(tar_file_name, "w");
-#if(ADD_FIRST_HEAD)
-        unsigned int num;
-        SPropRecord *sps = parseSPropParameterSets(fSubsession.fmtp_spropparametersets(), num);
-        if(fp && sps)
-        {
-          fwrite(start_code, 4, 1, fp);
-          fwrite(sps[0].sPropBytes, sps[0].sPropLength, 1, fp);
-          fwrite(start_code, 4, 1, fp);
-          fwrite(sps[1].sPropBytes, sps[1].sPropLength, 1, fp);
-          fclose(fp);
-          delete [] sps;
-        }
-#else
-        if(fp)
-          fclose(fp);
-#endif
-        fp = NULL;
-      }
-      firstFrame = False;
-    }
-    char *pbuf = (char *)fReceiveBuffer;
-    char head[4] = {0x00, 0x00, 0x00, 0x01};
-    FILE *fp = fopen(tar_file_name, "a+b");
-    if(fp)
-    {
-#if(ADD_HEAD)
-      fwrite(head, 4, 1, fp);
-#endif
-      fwrite(fReceiveBuffer, frameSize, 1, fp);
-      fclose(fp);
-      fp = NULL;
-    }
-  }
-  // Then continue, to request the next frame of data:
-  continuePlaying();
-}
-
 Boolean DummySink::continuePlaying() {
   if (fSource == NULL) return False; // sanity check (should not happen)
 
@@ -642,5 +470,226 @@ Boolean DummySink::continuePlaying() {
                         afterGettingFrame, this,
                         onSourceClosure, this);
   return True;
+}
+
+
+//---------------------------------------- 分割线 ----------------------------------------
+
+static char tar_file_name[128] = "test";
+static bool slave_mode = 0;//从机模式,连接后从stdout吐帧数据,可用重定向'>>'来写到文件
+
+extern int h264_decode_sps(unsigned char * buf,unsigned int nLen,int *width,int *height,int *fps);
+extern int h265_decode_sps(unsigned char * buf,unsigned int nLen,int *width,int *height,int *fps);
+
+void DummySink::afterGettingFrame(
+    unsigned frameSize, 
+    unsigned numTruncatedBytes,
+    struct timeval presentationTime, 
+    unsigned /*durationInMicroseconds*/)
+{
+  static bool firstFrame = true;
+  static int cI = 0, cB = 0, cP = 0;
+  static bool isH264 = false;
+
+  // We've just received a frame of data.  (Optionally) print out information about it:
+  if(firstFrame)
+  {
+    if (fStreamId != NULL) 
+      envir() << "Stream \"" << fStreamId << "\"; ";
+    envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << ":\tReceived " << frameSize << " bytes";
+    if (numTruncatedBytes > 0) 
+      envir() << " (with " << numTruncatedBytes << " bytes truncated)";
+    char uSecsStr[6+1]; // used to output the 'microseconds' part of the presentation time
+    sprintf(uSecsStr, "%06u", (unsigned)presentationTime.tv_usec);
+    envir() << ".\tPresentation time: " << (unsigned)presentationTime.tv_sec << "." << uSecsStr;
+    if (fSubsession.rtpSource() != NULL && !fSubsession.rtpSource()->hasBeenSynchronizedUsingRTCP())
+      envir() << "!"; // mark the debugging output to indicate that this presentation time is not RTCP-synchronized
+    envir() << "\n";
+  }
+
+  //todo one frame
+  //save to file
+  if(!strcmp(fSubsession.mediumName(), "video"))
+  {
+    if(firstFrame)
+    {
+      if(!slave_mode)
+      {
+        if(strstr(fSubsession.codecName(), "265"))
+        {
+          strcpy(&tar_file_name[strlen(tar_file_name)], ".h265");
+          FILE *fp = fopen(tar_file_name, "w");
+          if(fp) fclose(fp);
+          isH264 = false;
+        }
+        else if(strstr(fSubsession.codecName(), "264"))
+        {
+          strcpy(&tar_file_name[strlen(tar_file_name)], ".h264");
+          FILE *fp = fopen(tar_file_name, "w");
+          if(fp) fclose(fp);
+          isH264 = true;
+        }
+      }
+      firstFrame = False;
+    }
+
+    FILE *fp = NULL;
+    if(slave_mode)
+      fp = stdout;
+    else
+      fp = fopen(tar_file_name, "a+b");
+
+    if(fp)
+    {
+      int frameType = 0;
+
+      if(*((int*)fReceiveBuffer) != 0x1000000) // head == 00,00,00,01 ?
+      {
+        char head[4] = {0x00, 0x00, 0x00, 0x01};
+        fwrite(head, 4, 1, fp);
+      }
+      else
+        frameType = 4;
+      fwrite(fReceiveBuffer, frameSize, 1, fp);
+
+      if(!slave_mode)
+        fclose(fp);
+
+      if(isH264)
+      {
+        frameType = fReceiveBuffer[frameType]&0x1F;
+        if(frameType == 7)
+        {
+          int width = 0, height = 0, fps = 0;
+          if(h264_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
+            envir() << "--> hit SPS frame: w/" << width
+                    << " h/" << height
+                    << " fps/" << fps
+                    << " " << fSubsession.mediumName() 
+                    << "/" << fSubsession.codecName()
+                    << " I-frame/" << cI 
+                    << " P-frame/" << cP 
+                    << " B-frame/" << cB
+                    << "\n";
+        }
+        else if(frameType == 5)
+        {
+          cI += 1;
+          cP = 0;
+          cB = 0;
+        }
+        else if(frameType == 1)
+          cP += 1;
+      }
+      else
+      {
+        frameType = (fReceiveBuffer[frameType]&0x7E)>>1;
+        if(frameType == 33)
+        {
+          int width = 0, height = 0, fps = 0;
+          if(h265_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
+            envir() << "--> hit SPS frame: w/" << width
+                    << " h/" << height
+                    << " fps/" << fps
+                    << " " << fSubsession.mediumName() 
+                    << "/" << fSubsession.codecName()
+                    << " I-frame/" << cI 
+                    << " P-frame/" << cP 
+                    << " B-frame/" << cB
+                    << "\n";
+        }
+        else if(frameType == 19)
+        {
+          cI += 1;
+          cP = 0;
+          cB = 0;
+        }
+        else if(frameType == 1)
+          cP += 1;
+      }
+    }
+  }
+  // Then continue, to request the next frame of data:
+  continuePlaying();
+}
+
+char eventLoopWatchVariable = 0;
+
+void usage(UsageEnvironment& env, char const* progName) {
+  env << "\n";
+  env << "Usage:\n";
+  env << "  " << progName << " <rtsp://usr:pwd@ip:port/path> <option>\n";
+  env << "\n";
+  env << "Option:\n";
+  env << "  -f fileName : write h264/h265 stream to file (default save to ./test.h26x)\n";
+  env << "  -slave : write h264/h265 stream to stdout\n";
+  env << "\n";
+  env << "Example:\n";
+  env << "  " << progName << " rtsp://192.168.1.2/test\n";
+  env << "  " << progName << " rtsp://user:1234@192.168.1.2:554/test\n";
+  env << "  " << progName << " rtsp://192.168.1.2/test -f ./test\n";
+  env << "  " << progName << " rtsp://192.168.1.2/test -slave >> ./test.h264\n";
+  env << "\n";
+}
+
+int main(int argc, char** argv)
+{
+  // Begin by setting up our usage environment:
+  TaskScheduler* scheduler = BasicTaskScheduler::createNew();
+  UsageEnvironment* env = BasicUsageEnvironment::createNew(*scheduler);
+
+  // We need at least one "rtsp://" URL argument:
+  if (argc < 2) {
+    usage(*env, argv[0]);
+    return 1;
+  }
+
+  // 解析传参
+  char *param;
+  int i;
+
+  for(i = 1; i < argc; i++)
+  {
+    param = argv[i];
+    
+    if(strncmp(param, "-f", 2) == 0 && i + 1 < argc)
+    {
+      i += 1;
+      memset(tar_file_name, 0, sizeof(tar_file_name));
+      strcpy(tar_file_name, argv[i]);
+    }
+    else if(strncmp(param, "-slave", 6) == 0)
+    {
+      slave_mode = true;
+    }
+    else if(strstr(param, "-?") || strstr(param, "--help"))
+    {
+      usage(*env, argv[0]);
+      return 1;
+    }
+    else
+    {
+      openURL(*env, argv[0], argv[i]);
+    }
+  }
+
+  // There are argc-1 URLs: argv[1] through argv[argc-1].  Open and start streaming each one:
+  // for (int i = 1; i <= argc-1; ++i) {
+  //   openURL(*env, argv[0], argv[i]);
+  // }
+
+  // All subsequent activity takes place within the event loop:
+  env->taskScheduler().doEventLoop(&eventLoopWatchVariable);
+    // This function call does not return, unless, at some point in time, "eventLoopWatchVariable" gets set to something non-zero.
+
+  return 0;
+
+  // If you choose to continue the application past this point (i.e., if you comment out the "return 0;" statement above),
+  // and if you don't intend to do anything more with the "TaskScheduler" and "UsageEnvironment" objects,
+  // then you can also reclaim the (small) memory used by these objects by uncommenting the following code:
+  /*
+    env->reclaim(); env = NULL;
+    delete scheduler; scheduler = NULL;
+  */
 }
 
