@@ -18,7 +18,7 @@ LIB += -L$(RPATH)/libs/lib
 CFLAGS += -lliveMedia -lgroupsock -lBasicUsageEnvironment -lUsageEnvironment
 
 target:
-	@$(CXX) -O3 -Wall -o demo $(RPATH)/rtsp_to_h264.cpp $(RPATH)/h26x_sps_dec.c $(INC) $(LIB) $(CFLAGS)
+	@$(CXX) -O3 -Wall -o demo $(RPATH)/rtsp_to_h264.cpp $(RPATH)/h26x_sps_dec.c $(RPATH)/shmem.c $(INC) $(LIB) $(CFLAGS)
 
 live555:
 	@tar -xzf $(RPATH)/live.2019.08.12.tar.gz -C $(RPATH)/libs && \

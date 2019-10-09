@@ -475,8 +475,29 @@ Boolean DummySink::continuePlaying() {
 
 //---------------------------------------- 分割线 ----------------------------------------
 
+extern int shm_create(char *path, int flag, int size, int isService, void **mem);
+extern int shm_destroy(int id);
+
+typedef struct{
+    unsigned char type;
+    unsigned char width[2];
+    unsigned char height[2];
+    unsigned char fps;
+    unsigned char flag;
+    unsigned char order;
+    unsigned char len[4];
+    unsigned char data[524276];
+}ShmData_Struct;
+
+static int shm_fd = 0;
+static ShmData_Struct *shm_dat = NULL;
+
 static char tar_file_name[128] = "test";
 static bool slave_mode = 0;//从机模式,连接后从stdout吐帧数据,可用重定向'>>'来写到文件
+
+static char shm_path[64] = "/tmp";
+static char shm_flag[2] = "s";
+static bool shm_mode = 0;
 
 extern int h264_decode_sps(unsigned char * buf,unsigned int nLen,int *width,int *height,int *fps);
 extern int h265_decode_sps(unsigned char * buf,unsigned int nLen,int *width,int *height,int *fps);
@@ -562,6 +583,16 @@ void DummySink::afterGettingFrame(
         {
           int width = 0, height = 0, fps = 0;
           if(h264_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
+          {
+            if(shm_dat)
+            {
+              shm_dat->type = 1;
+              shm_dat->width[0] = width&0xFF;
+              shm_dat->width[1] = (width>>8)&0xFF;
+              shm_dat->height[0] = height&0xFF;
+              shm_dat->height[1] = (height>>8)&0xFF;
+              shm_dat->fps = fps;
+            }
             envir() << "--> hit SPS frame: w/" << width
                     << " h/" << height
                     << " fps/" << fps
@@ -571,6 +602,7 @@ void DummySink::afterGettingFrame(
                     << " P-frame/" << cP 
                     << " B-frame/" << cB
                     << "\n";
+          }
         }
         else if(frameType == 5)
         {
@@ -588,6 +620,16 @@ void DummySink::afterGettingFrame(
         {
           int width = 0, height = 0, fps = 0;
           if(h265_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
+          {
+            if(shm_dat)
+            {
+              shm_dat->type = 2;
+              shm_dat->width[0] = width&0xFF;
+              shm_dat->width[1] = (width>>8)&0xFF;
+              shm_dat->height[0] = height&0xFF;
+              shm_dat->height[1] = (height>>8)&0xFF;
+              shm_dat->fps = fps;
+            }
             envir() << "--> hit SPS frame: w/" << width
                     << " h/" << height
                     << " fps/" << fps
@@ -597,6 +639,7 @@ void DummySink::afterGettingFrame(
                     << " P-frame/" << cP 
                     << " B-frame/" << cB
                     << "\n";
+          }
         }
         else if(frameType == 19)
         {
@@ -608,6 +651,18 @@ void DummySink::afterGettingFrame(
           cP += 1;
       }
     }
+
+    if(shm_dat)
+    {
+      shm_dat->flag = 1;
+      shm_dat->len[0] = frameSize&0xFF;
+      shm_dat->len[1] = (frameSize>>8)&0xFF;
+      shm_dat->len[2] = (frameSize>>16)&0xFF;
+      shm_dat->len[3] = (frameSize>>24)&0xFF;
+      memcpy(shm_dat->data, fReceiveBuffer, frameSize);
+      shm_dat->order++;
+      shm_dat->flag = 0;
+    }
   }
   // Then continue, to request the next frame of data:
   continuePlaying();
@@ -615,14 +670,29 @@ void DummySink::afterGettingFrame(
 
 char eventLoopWatchVariable = 0;
 
-void usage(UsageEnvironment& env, char const* progName) {
+void usage(UsageEnvironment& env, char const* progName)
+{
   env << "\n";
   env << "Usage:\n";
-  env << "  " << progName << " <rtsp://usr:pwd@ip:port/path> <option>\n";
+  env << "  " << progName << " <option> <rtsp://usr:pwd@ip:port/path>\n";
   env << "\n";
   env << "Option:\n";
   env << "  -f fileName : write h264/h265 stream to file (default save to ./test.h26x)\n";
   env << "  -slave : write h264/h265 stream to stdout\n";
+  env << "  -shm : backup h264/h265 data to share mem\n";
+  env << "         total size : 512*1024=524288 bytes\n";
+  env << "         ---------- format ----------\n";
+  env << "         offset len : describe\n";
+  env << "          [0]    1  : type 0/unknow 1/h264 2/h265\n";
+  env << "          [1]    2  : width (Little-Endian)\n";
+  env << "          [3]    2  : height (Little-Endian)\n";
+  env << "          [5]    1  : fps\n";
+  env << "          [6]    1  : flag 0/free 1/writing\n";
+  env << "          [7]    1  : order loop 0~255\n";
+  env << "          [8]    4  : data len (Little-Endian)\n";
+  env << "          [12] 524276 : data\n";
+  env << "  -shm_path path : share mem ipc_path (default: " << shm_path << ")\n";
+  env << "  -shm_flag id : share mem ipc_flag (default: '" << shm_flag << "')\n";
   env << "\n";
   env << "Example:\n";
   env << "  " << progName << " rtsp://192.168.1.2/test\n";
@@ -639,7 +709,8 @@ int main(int argc, char** argv)
   UsageEnvironment* env = BasicUsageEnvironment::createNew(*scheduler);
 
   // We need at least one "rtsp://" URL argument:
-  if (argc < 2) {
+  if (argc < 2)
+  {
     usage(*env, argv[0]);
     return 1;
   }
@@ -658,9 +729,26 @@ int main(int argc, char** argv)
       memset(tar_file_name, 0, sizeof(tar_file_name));
       strcpy(tar_file_name, argv[i]);
     }
-    else if(strncmp(param, "-slave", 6) == 0)
+    else if(strncmp(param, "-sh", 2) == 0 && i + 1 < argc)
     {
-      slave_mode = true;
+      i += 1;
+      memset(tar_file_name, 0, sizeof(tar_file_name));
+      strcpy(tar_file_name, argv[i]);
+    }
+    else if(strncmp(param, "-shm_path", 9) == 0 && i + 1 < argc)
+    {
+      i += 1;
+      memset(shm_path, 0, sizeof(shm_path));
+      strcpy(shm_path, argv[i]);
+    }
+    else if(strncmp(param, "-shm_flag", 7) == 0 && i + 1 < argc)
+    {
+      i += 1;
+      shm_flag[0] = argv[i][0];
+    }
+    else if(strncmp(param, "-shm", 3) == 0)
+    {
+      shm_mode = true;
     }
     else if(strstr(param, "-?") || strstr(param, "--help"))
     {
@@ -671,6 +759,15 @@ int main(int argc, char** argv)
     {
       openURL(*env, argv[0], argv[i]);
     }
+  }
+
+  //共享内存准备
+  if(shm_mode)
+  {
+    *env << "shm: size " << (int)sizeof(ShmData_Struct) 
+      << " path " << shm_path 
+      << " flag '" << shm_flag << "'\n";
+    shm_fd = shm_create(shm_path, shm_flag[0], sizeof(ShmData_Struct), 1, (void**)&shm_dat);
   }
 
   // There are argc-1 URLs: argv[1] through argv[argc-1].  Open and start streaming each one:
