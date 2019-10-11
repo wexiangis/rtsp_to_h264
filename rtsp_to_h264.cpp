@@ -438,7 +438,7 @@ StreamClientState::~StreamClientState() {
 
 // Even though we're not going to be doing anything with the incoming data, we still need to receive it.
 // Define the size of the buffer that we'll use:
-#define DUMMY_SINK_RECEIVE_BUFFER_SIZE 524288 //512*1024
+#define DUMMY_SINK_RECEIVE_BUFFER_SIZE 524276 //512*1024=524288 - 12
 
 DummySink* DummySink::createNew(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId) {
   return new DummySink(env, subsession, streamId);
@@ -552,13 +552,15 @@ void DummySink::afterGettingFrame(
         if(strstr(fSubsession.codecName(), "265"))
         {
           strcpy(&main_pro.tar_file_name[strlen(main_pro.tar_file_name)], ".h265");
-          main_pro.fp = fopen(main_pro.tar_file_name, "a+b");
+          main_pro.fp = fopen(main_pro.tar_file_name, "w");
+          // main_pro.fp = fopen(main_pro.tar_file_name, "a+b");
           main_pro.isH264 = false;
         }
         else if(strstr(fSubsession.codecName(), "264"))
         {
           strcpy(&main_pro.tar_file_name[strlen(main_pro.tar_file_name)], ".h264");
-          main_pro.fp = fopen(main_pro.tar_file_name, "a+b");
+          main_pro.fp = fopen(main_pro.tar_file_name, "w");
+          // main_pro.fp = fopen(main_pro.tar_file_name, "a+b");
           main_pro.isH264 = true;
         }
       }
@@ -661,14 +663,12 @@ void DummySink::afterGettingFrame(
 
     if(main_pro.shm_dat)
     {
-      main_pro.shm_dat->flag = 1;
-      main_pro.shm_dat->len[0] = frameSize&0xFF;
-      main_pro.shm_dat->len[1] = (frameSize>>8)&0xFF;
-      main_pro.shm_dat->len[2] = (frameSize>>16)&0xFF;
-      main_pro.shm_dat->len[3] = (frameSize>>24)&0xFF;
-      memcpy(main_pro.shm_dat->data, fReceiveBuffer, frameSize);
-      main_pro.shm_dat->order++;
-      main_pro.shm_dat->flag = 0;
+        if(main_pro.shm_dat->lock)
+          usleep(1000);
+        *((unsigned int*)main_pro.shm_dat->len) = frameSize;
+        memcpy(main_pro.shm_dat->data, fReceiveBuffer, frameSize);
+        main_pro.shm_dat->order++;
+        main_pro.shm_dat->lock = 1;
     }
 
   }
@@ -798,4 +798,5 @@ int main(int argc, char** argv)
     delete scheduler; scheduler = NULL;
   */
 }
+
 

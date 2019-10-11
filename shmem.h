@@ -7,7 +7,7 @@ typedef struct{
     unsigned char width[2];
     unsigned char height[2];
     unsigned char fps;
-    unsigned char flag;
+    unsigned char lock;
     unsigned char order;
     unsigned char len[4];
     unsigned char data[524276];
@@ -19,3 +19,4 @@ int process_open(char *cmd);
 void process_close(int pid);
 
 #endif
+
