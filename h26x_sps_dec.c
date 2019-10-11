@@ -451,3 +451,303 @@ int h264_decode_sps(unsigned char * buf,unsigned int nLen,int *width,int *height
     else
         return 0;
 }
+
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
+//return: 0/false 1/success
+int h26x_get_width_height(char *filePath, int *width, int *height, char isH264)
+{
+    unsigned char buff[1024] = {0};
+    int fps, fd, ret;
+    int retFinal = 0;
+    if((fd = open(filePath, O_RDONLY)) < 1)
+    {
+        fprintf(stderr, "h26x_get_width_height: open %s err !\n", filePath);
+        return retFinal;
+    }
+    if((ret = read(fd, buff, 1024)) > 0)
+    {
+        int i, step = 0;
+        if(isH264)
+        {
+            for(i = 0; i < ret - 10; i++)
+            {
+                if(buff[i] == 0 && buff[i+1] == 0 && buff[i+2] == 0 && buff[i+3] == 1)
+                {
+                    if(step == 0 && (buff[i+4]&0x1F) == 7)
+                    {
+                        i += 4;
+                        step = i;
+                    }
+                    else if(step)
+                    {
+                        retFinal = h264_decode_sps(&buff[step], i-step, width, height, &fps);
+                        break;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for(i = 0; i < ret - 10; i++)
+            {
+                if(buff[i] == 0 && buff[i+1] == 0 && buff[i+2] == 0 && buff[i+3] == 1)
+                {
+                    if(step == 0 && ((buff[i+4]&0x7E)>>1) == 33)
+                    {
+                        i += 4;
+                        step = i;
+                    }
+                    else if(step)
+                    {
+                        retFinal = h265_decode_sps(&buff[step], i-step, width, height, &fps);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    close(fd);
+    return retFinal;
+}
+
+//return: 0/false 1/success
+int mp4_get_width_height(char *filePath, int *width, int *height)
+{
+    unsigned char buff[9] = {0};
+    int fd, ret;
+    unsigned int size;
+    char *type;
+    int retFinal = 0;
+
+    type = (char*)&buff[4];
+
+    if((fd = open(filePath, O_RDONLY)) < 1)
+    {
+        fprintf(stderr, "mp4_get_width_height: open %s err !\n", filePath);
+        return retFinal;
+    }
+    while((ret = read(fd, buff, 8)) > 0)
+    {
+        size = (buff[0]<<24)|(buff[1]<<16)|(buff[2]<<8)|buff[3];
+        // printf("  type: %s  size: %d\n", type, size);
+
+        if(strncmp(type, "tkhd", 4) == 0)
+        {
+            //取该box的后8字节,宽高信息就在其中
+            if(lseek(fd, size - ret - 8, SEEK_CUR) < 1)
+            {
+                fprintf(stderr, "mp4_get_width_height: lseek err\n");
+                break;
+            }
+            if((ret = read(fd, buff, 8)) == 8)
+            {
+                // [16.16]格式??????
+                if(width)
+                    *width = (buff[0]<<8)|buff[1];
+                if(height)
+                    *height = (buff[4]<<8)|buff[5];
+                
+                retFinal = 1;
+            }
+            break;
+        }
+        else if(strncmp(type, "moov", 4) == 0 || strncmp(type, "trak", 4) == 0)//tkhd的上级目录,直接移动8字节即可
+            size = ret;
+        else if(size == 1 && strncmp(type, "mdat", 4) == 0)//mdat的largesize情况,要读取后面8字节作为box的size
+        {
+            if(read(fd, buff, 8) != 8)
+            {
+                fprintf(stderr, "mp4_get_width_height: read err\n");
+                break;
+            }
+            //计算当前的mdat包还剩多少字节
+            int i;
+            unsigned long long lsize = 0;
+            for(i = 0, lsize = 0; i < 8; i++)
+            {
+                lsize <<= 8;
+                lsize |= buff[i];
+            }
+            // printf("  type: %s  largesize: %ld\n", type, lsize);
+            lsize = lsize - ret - 8;
+            //lseek传参是int型,需小块移动
+            unsigned int tsize = 0;
+            while(lsize > 0)
+            {
+                if(lsize > 0x7FFFFFFF)
+                    tsize = 0x7FFFFFFF;
+                else
+                    tsize = (unsigned int)lsize;
+                lsize -= tsize;
+                if(lseek(fd, tsize, SEEK_CUR) < 0)
+                    break;
+            }
+            //不再移动
+            size = ret;
+        }
+        
+        if(size < ret)
+        {
+            fprintf(stderr, "mp4_get_width_height: format err at addr: %ld, size = %d\n", 
+                lseek(fd, 0, SEEK_CUR) - ret, size);
+            break;
+        }
+        else if(lseek(fd, size - ret, SEEK_CUR) < 0)
+        {
+            fprintf(stderr, "mp4_get_width_height: lseek to final\n");
+            break;
+        }
+    }
+    close(fd);
+    return retFinal;
+}
+
+
+static int mp4_fd = 0;
+static unsigned long long mdat_size = 0;
+
+void mp4_close(void)
+{
+    if(mp4_fd > 0)
+        close(mp4_fd);
+    mp4_fd = 0;
+    mdat_size = 0;
+}
+
+void mp4_open(char *filePath)
+{
+    unsigned char buff[9] = {0};
+    char *type;
+    int ret;
+
+    type = (char*)&buff[4];
+
+    if(mp4_fd)
+        mp4_close();
+    mp4_fd = open(filePath, O_RDONLY);
+    if(mp4_fd > 0)
+    {
+        //找到mdat
+        while((ret = read(mp4_fd, buff, 8)) > 0)
+        {
+            mdat_size = (buff[0]<<24)|(buff[1]<<16)|(buff[2]<<8)|buff[3];
+
+            if(strncmp(type, "mdat", 4) == 0)
+            {
+                if(mdat_size == 1)//largesize模式取后面8字节作为size
+                {
+                    if(read(mp4_fd, buff, 8) != 8)
+                    {
+                        fprintf(stderr, "mp4_open: read err\n");
+                        mp4_close();
+                        break;
+                    }
+                    int i;
+                    for(i = 0, mdat_size = 0; i < 8; i++)
+                    {
+                        mdat_size <<= 8;
+                        mdat_size |= buff[i];
+                    }
+                    mdat_size = mdat_size - ret - 8;
+                }
+                break;
+            }
+            
+            if(lseek(mp4_fd, mdat_size - ret, SEEK_CUR) < 0)
+            {
+                fprintf(stderr, "mp4_open: lseek to final\n");
+                mp4_close();
+                break;
+            }
+        }
+    }
+}
+
+//return: <=0 final or error
+int mp4_read_frame(unsigned char *data, int dataMaxLen)
+{
+    if(mp4_fd < 1 || mdat_size < 1)
+    {
+        mp4_close();
+        return -1;
+    }
+    
+    unsigned char buff[9] = {0};
+    unsigned int size = 0;
+    int retFinal = 0, ret;
+
+    if(read(mp4_fd, buff, 4) == 4)
+    {
+        size = (buff[0]<<24)|(buff[1]<<16)|(buff[2]<<8)|buff[3];
+        if(size < 1)
+            goto error_return;
+        
+        // printf("mp4_read_frame: size %d / remain %ld\n", size, mdat_size);
+
+        mdat_size = mdat_size - 4 - size;
+
+        if(size > dataMaxLen)
+        {
+            retFinal = read(mp4_fd, data, dataMaxLen);
+            read(mp4_fd, buff, size - dataMaxLen);
+        }
+        else
+            retFinal = read(mp4_fd, data, size);
+        
+        if(retFinal < 1)
+            goto error_return;
+
+        //寻找下一个mdat
+        if(mdat_size == 0)
+        {
+            char *type;
+            type = (char*)&buff[4];
+
+            //找到mdat
+            while((ret = read(mp4_fd, buff, 8)) > 0)
+            {
+                mdat_size = (buff[0]<<24)|(buff[1]<<16)|(buff[2]<<8)|buff[3];
+
+                if(strncmp(type, "mdat", 4) == 0)
+                {
+                    if(mdat_size == 1)
+                    {
+                        if(read(mp4_fd, buff, 8) != 8)
+                        {
+                            fprintf(stderr, "mp4_open: read err\n");
+                            mp4_close();
+                            break;
+                        }
+                        int i;
+                        for(i = 0, mdat_size = 0; i < 8; i++)
+                        {
+                            mdat_size <<= 8;
+                            mdat_size |= buff[i];
+                        }
+                        mdat_size = mdat_size - ret - 8;
+                    }
+                    break;
+                }
+                
+                if(lseek(mp4_fd, mdat_size - ret, SEEK_CUR) < 0)
+                {
+                    fprintf(stderr, "mp4_open: lseek to final\n");
+                    mp4_close();
+                    break;
+                }
+            }
+        }
+
+        return retFinal;
+    }
+
+error_return:
+    //error
+    mp4_close();
+    return 0;
+}
