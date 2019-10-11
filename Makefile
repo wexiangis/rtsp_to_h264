@@ -40,8 +40,9 @@ live555:
 	sed -i "s\/usr/local\$(RPATH)/libs\g" ./groupsock/Makefile && \
 	sed -i "s\/usr/local\$(RPATH)/libs\g" ./groupsock/Makefile.head && \
 	make -j4 && make install && \
-	cd - && \
-	rm $(RPATH)/libs/live -rf
+	cd -
+	# cd - && \
+	# rm $(RPATH)/libs/live -rf
 
 clean:
 	@rm -rf ./demo

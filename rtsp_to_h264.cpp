@@ -438,7 +438,7 @@ StreamClientState::~StreamClientState() {
 
 // Even though we're not going to be doing anything with the incoming data, we still need to receive it.
 // Define the size of the buffer that we'll use:
-#define DUMMY_SINK_RECEIVE_BUFFER_SIZE 1000000
+#define DUMMY_SINK_RECEIVE_BUFFER_SIZE 524288 //512*1024
 
 DummySink* DummySink::createNew(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId) {
   return new DummySink(env, subsession, streamId);
@@ -475,29 +475,43 @@ Boolean DummySink::continuePlaying() {
 
 //---------------------------------------- 分割线 ----------------------------------------
 
-extern int shm_create(char *path, int flag, int size, int isService, void **mem);
-extern int shm_destroy(int id);
+#include "shmem.h"
 
 typedef struct{
-    unsigned char type;
-    unsigned char width[2];
-    unsigned char height[2];
-    unsigned char fps;
-    unsigned char flag;
-    unsigned char order;
-    unsigned char len[4];
-    unsigned char data[524276];
-}ShmData_Struct;
+  char stepCount;
+  int cI, cB, cP;
+  bool isH264;
 
-static int shm_fd = 0;
-static ShmData_Struct *shm_dat = NULL;
+  FILE *fp;
+  char tar_file_name[128];
 
-static char tar_file_name[128] = "test";
-static bool slave_mode = 0;//从机模式,连接后从stdout吐帧数据,可用重定向'>>'来写到文件
+  bool slave_mode;//从机模式,连接后从stdout吐帧数据,可用重定向'>>'来写到文件
 
-static char shm_path[64] = "/tmp";
-static char shm_flag[2] = "s";
-static bool shm_mode = 0;
+  int shm_fd;
+  ShmData_Struct *shm_dat;
+  char shm_path[64];
+  char shm_flag[2];
+  bool shm_mode;
+}Main_Pro;
+
+static Main_Pro main_pro = {
+  .stepCount = 0,
+  .cI = 0,
+  .cB = 0,
+  .cP = 0,
+  .isH264 = false,
+
+  .fp = NULL,
+  .tar_file_name = {0},//"test",
+
+  .slave_mode = false,
+
+  .shm_fd = 0,
+  .shm_dat = NULL,
+  .shm_path = {0},//"/tmp",
+  .shm_flag = {0},//"s",
+  .shm_mode = 0,
+};
 
 extern int h264_decode_sps(unsigned char * buf,unsigned int nLen,int *width,int *height,int *fps);
 extern int h265_decode_sps(unsigned char * buf,unsigned int nLen,int *width,int *height,int *fps);
@@ -508,161 +522,155 @@ void DummySink::afterGettingFrame(
     struct timeval presentationTime, 
     unsigned /*durationInMicroseconds*/)
 {
-  static bool firstFrame = true;
-  static int cI = 0, cB = 0, cP = 0;
-  static bool isH264 = false;
+  // printf("head/0x%X len/%d\n", fReceiveBuffer[0], frameSize);
 
   // We've just received a frame of data.  (Optionally) print out information about it:
-  if(firstFrame)
-  {
-    if (fStreamId != NULL) 
-      envir() << "Stream \"" << fStreamId << "\"; ";
-    envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << ":\tReceived " << frameSize << " bytes";
-    if (numTruncatedBytes > 0) 
-      envir() << " (with " << numTruncatedBytes << " bytes truncated)";
-    char uSecsStr[6+1]; // used to output the 'microseconds' part of the presentation time
-    sprintf(uSecsStr, "%06u", (unsigned)presentationTime.tv_usec);
-    envir() << ".\tPresentation time: " << (unsigned)presentationTime.tv_sec << "." << uSecsStr;
-    if (fSubsession.rtpSource() != NULL && !fSubsession.rtpSource()->hasBeenSynchronizedUsingRTCP())
-      envir() << "!"; // mark the debugging output to indicate that this presentation time is not RTCP-synchronized
-    envir() << "\n";
-  }
+  // if(main_pro.stepCount == 0)
+  // {
+  //   if (fStreamId != NULL) 
+  //     envir() << "Stream \"" << fStreamId << "\"; ";
+  //   envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << ":\tReceived " << frameSize << " bytes";
+  //   if (numTruncatedBytes > 0) 
+  //     envir() << " (with " << numTruncatedBytes << " bytes truncated)";
+  //   char uSecsStr[6+1]; // used to output the 'microseconds' part of the presentation time
+  //   sprintf(uSecsStr, "%06u", (unsigned)presentationTime.tv_usec);
+  //   envir() << ".\tPresentation time: " << (unsigned)presentationTime.tv_sec << "." << uSecsStr;
+  //   if (fSubsession.rtpSource() != NULL && !fSubsession.rtpSource()->hasBeenSynchronizedUsingRTCP())
+  //     envir() << "!"; // mark the debugging output to indicate that this presentation time is not RTCP-synchronized
+  //   envir() << "\n";
+  // }
 
-  //todo one frame
   //save to file
-  if(!strcmp(fSubsession.mediumName(), "video"))
+  // if(!strcmp(fSubsession.mediumName(), "video"))
   {
-    if(firstFrame)
+    if(main_pro.stepCount == 0)
     {
-      if(!slave_mode)
+      if(main_pro.slave_mode)
+        main_pro.fp = stdout;
+      else
       {
         if(strstr(fSubsession.codecName(), "265"))
         {
-          strcpy(&tar_file_name[strlen(tar_file_name)], ".h265");
-          FILE *fp = fopen(tar_file_name, "w");
-          if(fp) fclose(fp);
-          isH264 = false;
+          strcpy(&main_pro.tar_file_name[strlen(main_pro.tar_file_name)], ".h265");
+          main_pro.fp = fopen(main_pro.tar_file_name, "a+b");
+          main_pro.isH264 = false;
         }
         else if(strstr(fSubsession.codecName(), "264"))
         {
-          strcpy(&tar_file_name[strlen(tar_file_name)], ".h264");
-          FILE *fp = fopen(tar_file_name, "w");
-          if(fp) fclose(fp);
-          isH264 = true;
+          strcpy(&main_pro.tar_file_name[strlen(main_pro.tar_file_name)], ".h264");
+          main_pro.fp = fopen(main_pro.tar_file_name, "a+b");
+          main_pro.isH264 = true;
         }
       }
-      firstFrame = False;
+      main_pro.stepCount += 1;
     }
 
-    FILE *fp = NULL;
-    if(slave_mode)
-      fp = stdout;
-    else
-      fp = fopen(tar_file_name, "a+b");
-
-    if(fp)
+    if(main_pro.fp)
     {
       int frameType = 0;
 
       if(*((int*)fReceiveBuffer) != 0x1000000) // head == 00,00,00,01 ?
       {
         char head[4] = {0x00, 0x00, 0x00, 0x01};
-        fwrite(head, 4, 1, fp);
+        fwrite(head, 4, 1, main_pro.fp);
       }
       else
         frameType = 4;
-      fwrite(fReceiveBuffer, frameSize, 1, fp);
+      fwrite(fReceiveBuffer, frameSize, 1, main_pro.fp);
 
-      if(!slave_mode)
-        fclose(fp);
-
-      if(isH264)
+      if(main_pro.stepCount == 1)
       {
-        frameType = fReceiveBuffer[frameType]&0x1F;
-        if(frameType == 7)
+        if(main_pro.isH264)
         {
-          int width = 0, height = 0, fps = 0;
-          if(h264_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
+          frameType = fReceiveBuffer[frameType]&0x1F;
+          if(frameType == 7)
           {
-            if(shm_dat)
+            int width = 0, height = 0, fps = 0;
+            if(h264_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
             {
-              shm_dat->type = 1;
-              shm_dat->width[0] = width&0xFF;
-              shm_dat->width[1] = (width>>8)&0xFF;
-              shm_dat->height[0] = height&0xFF;
-              shm_dat->height[1] = (height>>8)&0xFF;
-              shm_dat->fps = fps;
+              if(main_pro.shm_dat)
+              {
+                main_pro.shm_dat->type = 1;
+                main_pro.shm_dat->width[0] = width&0xFF;
+                main_pro.shm_dat->width[1] = (width>>8)&0xFF;
+                main_pro.shm_dat->height[0] = height&0xFF;
+                main_pro.shm_dat->height[1] = (height>>8)&0xFF;
+                main_pro.shm_dat->fps = fps;
+              }
+              envir() << "--> hit SPS frame: w/" << width
+                      << " h/" << height
+                      << " fps/" << fps
+                      << " " << fSubsession.mediumName() 
+                      << "/" << fSubsession.codecName()
+                      << " I-frame/" << main_pro.cI 
+                      << " P-frame/" << main_pro.cP 
+                      << " B-frame/" << main_pro.cB
+                      << "\n";
+              // main_pro.stepCount += 1;
             }
-            envir() << "--> hit SPS frame: w/" << width
-                    << " h/" << height
-                    << " fps/" << fps
-                    << " " << fSubsession.mediumName() 
-                    << "/" << fSubsession.codecName()
-                    << " I-frame/" << cI 
-                    << " P-frame/" << cP 
-                    << " B-frame/" << cB
-                    << "\n";
           }
-        }
-        else if(frameType == 5)
-        {
-          cI += 1;
-          cP = 0;
-          cB = 0;
-        }
-        else if(frameType == 1)
-          cP += 1;
-      }
-      else
-      {
-        frameType = (fReceiveBuffer[frameType]&0x7E)>>1;
-        if(frameType == 33)
-        {
-          int width = 0, height = 0, fps = 0;
-          if(h265_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
+          else if(frameType == 5)
           {
-            if(shm_dat)
-            {
-              shm_dat->type = 2;
-              shm_dat->width[0] = width&0xFF;
-              shm_dat->width[1] = (width>>8)&0xFF;
-              shm_dat->height[0] = height&0xFF;
-              shm_dat->height[1] = (height>>8)&0xFF;
-              shm_dat->fps = fps;
-            }
-            envir() << "--> hit SPS frame: w/" << width
-                    << " h/" << height
-                    << " fps/" << fps
-                    << " " << fSubsession.mediumName() 
-                    << "/" << fSubsession.codecName()
-                    << " I-frame/" << cI 
-                    << " P-frame/" << cP 
-                    << " B-frame/" << cB
-                    << "\n";
+            main_pro.cI += 1;
+            main_pro.cP = 0;
+            main_pro.cB = 0;
           }
+          else if(frameType == 1)
+            main_pro.cP += 1;
         }
-        else if(frameType == 19)
+        else
         {
-          cI += 1;
-          cP = 0;
-          cB = 0;
+          frameType = (fReceiveBuffer[frameType]&0x7E)>>1;
+          if(frameType == 33)
+          {
+            int width = 0, height = 0, fps = 0;
+            if(h265_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
+            {
+              if(main_pro.shm_dat)
+              {
+                main_pro.shm_dat->type = 2;
+                main_pro.shm_dat->width[0] = width&0xFF;
+                main_pro.shm_dat->width[1] = (width>>8)&0xFF;
+                main_pro.shm_dat->height[0] = height&0xFF;
+                main_pro.shm_dat->height[1] = (height>>8)&0xFF;
+                main_pro.shm_dat->fps = fps;
+              }
+              envir() << "--> hit SPS frame: w/" << width
+                      << " h/" << height
+                      << " fps/" << fps
+                      << " " << fSubsession.mediumName() 
+                      << "/" << fSubsession.codecName()
+                      << " I-frame/" << main_pro.cI 
+                      << " P-frame/" << main_pro.cP 
+                      << " B-frame/" << main_pro.cB
+                      << "\n";
+              // main_pro.stepCount += 1;
+            }
+          }
+          else if(frameType == 19)
+          {
+            main_pro.cI += 1;
+            main_pro.cP = 0;
+            main_pro.cB = 0;
+          }
+          else if(frameType == 1)
+            main_pro.cP += 1;
         }
-        else if(frameType == 1)
-          cP += 1;
       }
     }
 
-    if(shm_dat)
+    if(main_pro.shm_dat)
     {
-      shm_dat->flag = 1;
-      shm_dat->len[0] = frameSize&0xFF;
-      shm_dat->len[1] = (frameSize>>8)&0xFF;
-      shm_dat->len[2] = (frameSize>>16)&0xFF;
-      shm_dat->len[3] = (frameSize>>24)&0xFF;
-      memcpy(shm_dat->data, fReceiveBuffer, frameSize);
-      shm_dat->order++;
-      shm_dat->flag = 0;
+      main_pro.shm_dat->flag = 1;
+      main_pro.shm_dat->len[0] = frameSize&0xFF;
+      main_pro.shm_dat->len[1] = (frameSize>>8)&0xFF;
+      main_pro.shm_dat->len[2] = (frameSize>>16)&0xFF;
+      main_pro.shm_dat->len[3] = (frameSize>>24)&0xFF;
+      memcpy(main_pro.shm_dat->data, fReceiveBuffer, frameSize);
+      main_pro.shm_dat->order++;
+      main_pro.shm_dat->flag = 0;
     }
+
   }
   // Then continue, to request the next frame of data:
   continuePlaying();
@@ -691,8 +699,8 @@ void usage(UsageEnvironment& env, char const* progName)
   env << "          [7]    1  : order loop 0~255\n";
   env << "          [8]    4  : data len (Little-Endian)\n";
   env << "          [12] 524276 : data\n";
-  env << "  -shm_path path : share mem ipc_path (default: " << shm_path << ")\n";
-  env << "  -shm_flag id : share mem ipc_flag (default: '" << shm_flag << "')\n";
+  env << "  -shm_path path : share mem ipc_path (default: " << main_pro.shm_path << ")\n";
+  env << "  -shm_flag id : share mem ipc_flag (default: '" << main_pro.shm_flag << "')\n";
   env << "\n";
   env << "Example:\n";
   env << "  " << progName << " rtsp://192.168.1.2/test\n";
@@ -708,16 +716,19 @@ int main(int argc, char** argv)
   TaskScheduler* scheduler = BasicTaskScheduler::createNew();
   UsageEnvironment* env = BasicUsageEnvironment::createNew(*scheduler);
 
+  // 解析传参
+  char *param;
+  int i;
+  strcpy(main_pro.tar_file_name, "test");
+  strcpy(main_pro.shm_path, "/tmp");
+  strcpy(main_pro.shm_flag, "s");
+
   // We need at least one "rtsp://" URL argument:
   if (argc < 2)
   {
     usage(*env, argv[0]);
     return 1;
   }
-
-  // 解析传参
-  char *param;
-  int i;
 
   for(i = 1; i < argc; i++)
   {
@@ -726,48 +737,46 @@ int main(int argc, char** argv)
     if(strncmp(param, "-f", 2) == 0 && i + 1 < argc)
     {
       i += 1;
-      memset(tar_file_name, 0, sizeof(tar_file_name));
-      strcpy(tar_file_name, argv[i]);
+      memset(main_pro.tar_file_name, 0, sizeof(main_pro.tar_file_name));
+      strcpy(main_pro.tar_file_name, argv[i]);
     }
-    else if(strncmp(param, "-sh", 2) == 0 && i + 1 < argc)
+    else if(strncmp(param, "-slave", 6) == 0)
     {
-      i += 1;
-      memset(tar_file_name, 0, sizeof(tar_file_name));
-      strcpy(tar_file_name, argv[i]);
+      main_pro.slave_mode = true;
     }
     else if(strncmp(param, "-shm_path", 9) == 0 && i + 1 < argc)
     {
       i += 1;
-      memset(shm_path, 0, sizeof(shm_path));
-      strcpy(shm_path, argv[i]);
+      memset(main_pro.shm_path, 0, sizeof(main_pro.shm_path));
+      strcpy(main_pro.shm_path, argv[i]);
     }
     else if(strncmp(param, "-shm_flag", 7) == 0 && i + 1 < argc)
     {
       i += 1;
-      shm_flag[0] = argv[i][0];
+      main_pro.shm_flag[0] = argv[i][0];
     }
     else if(strncmp(param, "-shm", 3) == 0)
     {
-      shm_mode = true;
+      main_pro.shm_mode = true;
     }
     else if(strstr(param, "-?") || strstr(param, "--help"))
     {
       usage(*env, argv[0]);
       return 1;
     }
-    else
+    else //if(strstr(param, "rtsp"))
     {
       openURL(*env, argv[0], argv[i]);
     }
   }
 
   //共享内存准备
-  if(shm_mode)
+  if(main_pro.shm_mode)
   {
     *env << "shm: size " << (int)sizeof(ShmData_Struct) 
-      << " path " << shm_path 
-      << " flag '" << shm_flag << "'\n";
-    shm_fd = shm_create(shm_path, shm_flag[0], sizeof(ShmData_Struct), 1, (void**)&shm_dat);
+      << " path " << main_pro.shm_path 
+      << " flag '" << main_pro.shm_flag << "'\n";
+    main_pro.shm_fd = shm_create(main_pro.shm_path, main_pro.shm_flag[0], sizeof(ShmData_Struct), 1, (void**)&main_pro.shm_dat);
   }
 
   // There are argc-1 URLs: argv[1] through argv[argc-1].  Open and start streaming each one:
