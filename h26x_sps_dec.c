@@ -12,7 +12,7 @@
 #include <string.h>
 #include <string.h>
 #include <math.h>
- 
+
 void get_profile(int profile_idc, char* profile_str)
 {
     switch(profile_idc){

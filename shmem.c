@@ -8,7 +8,6 @@
 #include <sys/types.h>
 #include <sys/shm.h>
 #include <sys/select.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
@@ -46,7 +45,24 @@ int shm_destroy(int id)
 	return shmctl(id,IPC_RMID,NULL);
 }
 
-int process_open(char *cmd)
+pid_t process_rtspToH264(char *filePath, char *url)
+{
+    pid_t pid;
+    if(!filePath || !url)
+        return 0;
+    pid = fork();
+    if(pid < 0)
+        return 0;
+    else if(pid == 0) //child process
+    {
+        execl(filePath, "rtspToH264", url, 
+            "-shm", "-f", "/dev/null", (char *)0);
+        _exit(127);
+    }
+    return pid;
+}
+
+pid_t process_open(char *cmd)
 {
     pid_t pid;
     if(!cmd)
@@ -61,11 +77,11 @@ int process_open(char *cmd)
     return pid;
 }
 
-void process_close(int pid)
+void process_close(pid_t pid)
 {
     if(pid)
     {
-        if(waitpid(pid, NULL, WNOHANG|WUNTRACED) == 0)
+        if(waitpid(pid, NULL, WNOHANG|WUNTRACED) != pid)
             kill(pid, SIGKILL);
     }
 }

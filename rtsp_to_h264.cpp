@@ -543,6 +543,17 @@ void DummySink::afterGettingFrame(
   //save to file
   // if(!strcmp(fSubsession.mediumName(), "video"))
   {
+
+    if(main_pro.shm_dat)
+    {
+        if(main_pro.shm_dat->lock)
+          usleep(1000);
+        *((unsigned int*)main_pro.shm_dat->len) = frameSize;
+        memcpy(main_pro.shm_dat->data, fReceiveBuffer, frameSize);
+        main_pro.shm_dat->order++;
+        main_pro.shm_dat->lock = 1;
+    }
+
     if(main_pro.stepCount == 0)
     {
       if(main_pro.slave_mode)
@@ -567,10 +578,9 @@ void DummySink::afterGettingFrame(
       main_pro.stepCount += 1;
     }
 
+    int frameType = 0;
     if(main_pro.fp)
     {
-      int frameType = 0;
-
       if(*((int*)fReceiveBuffer) != 0x1000000) // head == 00,00,00,01 ?
       {
         char head[4] = {0x00, 0x00, 0x00, 0x01};
@@ -579,98 +589,94 @@ void DummySink::afterGettingFrame(
       else
         frameType = 4;
       fwrite(fReceiveBuffer, frameSize, 1, main_pro.fp);
+    }
 
-      if(main_pro.stepCount == 1)
+    if(main_pro.stepCount == 1)
+    {
+      if(main_pro.isH264)
       {
-        if(main_pro.isH264)
+        frameType = fReceiveBuffer[frameType]&0x1F;
+        if(frameType == 7)
         {
-          frameType = fReceiveBuffer[frameType]&0x1F;
-          if(frameType == 7)
+          int width = 0, height = 0, fps = 0;
+          if(h264_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
           {
-            int width = 0, height = 0, fps = 0;
-            if(h264_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
+            if(main_pro.shm_dat)
             {
-              if(main_pro.shm_dat)
-              {
-                main_pro.shm_dat->type = 1;
-                main_pro.shm_dat->width[0] = width&0xFF;
-                main_pro.shm_dat->width[1] = (width>>8)&0xFF;
-                main_pro.shm_dat->height[0] = height&0xFF;
-                main_pro.shm_dat->height[1] = (height>>8)&0xFF;
-                main_pro.shm_dat->fps = fps;
-              }
-              envir() << "--> hit SPS frame: w/" << width
-                      << " h/" << height
-                      << " fps/" << fps
-                      << " " << fSubsession.mediumName() 
-                      << "/" << fSubsession.codecName()
-                      << " I-frame/" << main_pro.cI 
-                      << " P-frame/" << main_pro.cP 
-                      << " B-frame/" << main_pro.cB
-                      << "\n";
-              // main_pro.stepCount += 1;
+              main_pro.shm_dat->type = 1;
+              main_pro.shm_dat->width[0] = width&0xFF;
+              main_pro.shm_dat->width[1] = (width>>8)&0xFF;
+              main_pro.shm_dat->height[0] = height&0xFF;
+              main_pro.shm_dat->height[1] = (height>>8)&0xFF;
+              main_pro.shm_dat->fps = fps;
             }
+            envir() << "--> hit SPS frame: w/" << width
+                    << " h/" << height
+                    << " fps/" << fps
+                    << " " << fSubsession.mediumName() 
+                    << "/" << fSubsession.codecName()
+                    << " I-frame/" << main_pro.cI 
+                    << " P-frame/" << main_pro.cP 
+                    << " B-frame/" << main_pro.cB
+                    << "\n";
+            // main_pro.stepCount += 1;
           }
-          else if(frameType == 5)
-          {
-            main_pro.cI += 1;
-            main_pro.cP = 0;
-            main_pro.cB = 0;
-          }
-          else if(frameType == 1)
-            main_pro.cP += 1;
         }
-        else
+        else if(frameType == 5)
         {
-          frameType = (fReceiveBuffer[frameType]&0x7E)>>1;
-          if(frameType == 33)
-          {
-            int width = 0, height = 0, fps = 0;
-            if(h265_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
-            {
-              if(main_pro.shm_dat)
-              {
-                main_pro.shm_dat->type = 2;
-                main_pro.shm_dat->width[0] = width&0xFF;
-                main_pro.shm_dat->width[1] = (width>>8)&0xFF;
-                main_pro.shm_dat->height[0] = height&0xFF;
-                main_pro.shm_dat->height[1] = (height>>8)&0xFF;
-                main_pro.shm_dat->fps = fps;
-              }
-              envir() << "--> hit SPS frame: w/" << width
-                      << " h/" << height
-                      << " fps/" << fps
-                      << " " << fSubsession.mediumName() 
-                      << "/" << fSubsession.codecName()
-                      << " I-frame/" << main_pro.cI 
-                      << " P-frame/" << main_pro.cP 
-                      << " B-frame/" << main_pro.cB
-                      << "\n";
-              // main_pro.stepCount += 1;
-            }
-          }
-          else if(frameType == 19)
-          {
-            main_pro.cI += 1;
-            main_pro.cP = 0;
-            main_pro.cB = 0;
-          }
-          else if(frameType == 1)
-            main_pro.cP += 1;
+          main_pro.cI += 1;
+          main_pro.cP = 0;
+          main_pro.cB = 0;
         }
+        else if(frameType == 1)
+          main_pro.cP += 1;
+      }
+      else
+      {
+        frameType = (fReceiveBuffer[frameType]&0x7E)>>1;
+        if(frameType == 33)
+        {
+          int width = 0, height = 0, fps = 0;
+          if(h265_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
+          {
+            if(main_pro.shm_dat)
+            {
+              main_pro.shm_dat->type = 2;
+              main_pro.shm_dat->width[0] = width&0xFF;
+              main_pro.shm_dat->width[1] = (width>>8)&0xFF;
+              main_pro.shm_dat->height[0] = height&0xFF;
+              main_pro.shm_dat->height[1] = (height>>8)&0xFF;
+              main_pro.shm_dat->fps = fps;
+            }
+            envir() << "--> hit SPS frame: w/" << width
+                    << " h/" << height
+                    << " fps/" << fps
+                    << " " << fSubsession.mediumName() 
+                    << "/" << fSubsession.codecName()
+                    << " I-frame/" << main_pro.cI 
+                    << " P-frame/" << main_pro.cP 
+                    << " B-frame/" << main_pro.cB
+                    << "\n";
+            // main_pro.stepCount += 1;
+          }
+        }
+        else if(frameType == 19)
+        {
+          main_pro.cI += 1;
+          main_pro.cP = 0;
+          main_pro.cB = 0;
+        }
+        else if(frameType == 1)
+          main_pro.cP += 1;
       }
     }
-
-    if(main_pro.shm_dat)
+    else if(main_pro.shm_dat)
     {
-        if(main_pro.shm_dat->lock)
-          usleep(1000);
-        *((unsigned int*)main_pro.shm_dat->len) = frameSize;
-        memcpy(main_pro.shm_dat->data, fReceiveBuffer, frameSize);
-        main_pro.shm_dat->order++;
-        main_pro.shm_dat->lock = 1;
+      if(main_pro.isH264)
+        main_pro.shm_dat->type = 1;
+      else
+        main_pro.shm_dat->type = 2;
     }
-
   }
   // Then continue, to request the next frame of data:
   continuePlaying();
@@ -777,6 +783,8 @@ int main(int argc, char** argv)
       << " path " << main_pro.shm_path 
       << " flag '" << main_pro.shm_flag << "'\n";
     main_pro.shm_fd = shm_create(main_pro.shm_path, main_pro.shm_flag[0], sizeof(ShmData_Struct), 1, (void**)&main_pro.shm_dat);
+    if(main_pro.shm_dat)
+      main_pro.shm_dat->type = 0;
   }
 
   // There are argc-1 URLs: argv[1] through argv[argc-1].  Open and start streaming each one:
@@ -798,5 +806,4 @@ int main(int argc, char** argv)
     delete scheduler; scheduler = NULL;
   */
 }
-
 
