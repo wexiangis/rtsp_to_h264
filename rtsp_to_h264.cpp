@@ -550,12 +550,12 @@ void DummySink::afterGettingFrame(
 
     if(main_pro.shm_dat)
     {
-        if(main_pro.shm_dat->lock)
+        if(main_pro.shm_dat->ready)
           usleep(1000);
         *((unsigned int*)main_pro.shm_dat->len) = frameSize;
         memcpy(main_pro.shm_dat->data, fReceiveBuffer, frameSize);
         main_pro.shm_dat->order++;
-        main_pro.shm_dat->lock = 1;
+        main_pro.shm_dat->ready = 1;
     }
 
     if(main_pro.stepCount == 0)
@@ -708,7 +708,7 @@ void usage(UsageEnvironment& env, char const* progName)
   env << "          [1]    2  : width (Little-Endian)\n";
   env << "          [3]    2  : height (Little-Endian)\n";
   env << "          [5]    1  : fps\n";
-  env << "          [6]    1  : flag 0/free 1/writing\n";
+  env << "          [6]    1  : ready 0/free 1/data ready\n";
   env << "          [7]    1  : order loop 0~255\n";
   env << "          [8]    4  : data len (Little-Endian)\n";
   env << "          [12] 524276 : data\n";

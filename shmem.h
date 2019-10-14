@@ -9,7 +9,7 @@ typedef struct{
     unsigned char width[2];
     unsigned char height[2];
     unsigned char fps;
-    unsigned char lock;
+    unsigned char ready;
     unsigned char order;
     unsigned char len[4];
     unsigned char data[524276];
