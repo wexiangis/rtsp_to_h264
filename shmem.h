@@ -20,6 +20,6 @@ int shm_destroy(int id);
 
 pid_t process_rtspToH264(char *filePath, char *url);
 pid_t process_open(char *cmd);
-void process_close(pid_t pid);
+void process_close(pid_t *pid);
 
 #endif

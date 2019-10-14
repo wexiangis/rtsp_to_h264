@@ -492,6 +492,8 @@ typedef struct{
   char shm_path[64];
   char shm_flag[2];
   bool shm_mode;
+
+  bool debug;
 }Main_Pro;
 
 static Main_Pro main_pro = {
@@ -511,6 +513,8 @@ static Main_Pro main_pro = {
   .shm_path = {0},//"/tmp",
   .shm_flag = {0},//"s",
   .shm_mode = 0,
+
+  .debug = false,
 };
 
 extern int h264_decode_sps(unsigned char * buf,unsigned int nLen,int *width,int *height,int *fps);
@@ -619,7 +623,8 @@ void DummySink::afterGettingFrame(
                     << " P-frame/" << main_pro.cP 
                     << " B-frame/" << main_pro.cB
                     << "\n";
-            // main_pro.stepCount += 1;
+            if(!main_pro.debug)
+              main_pro.stepCount += 1;
           }
         }
         else if(frameType == 5)
@@ -657,7 +662,8 @@ void DummySink::afterGettingFrame(
                     << " P-frame/" << main_pro.cP 
                     << " B-frame/" << main_pro.cB
                     << "\n";
-            // main_pro.stepCount += 1;
+            if(!main_pro.debug)
+              main_pro.stepCount += 1;
           }
         }
         else if(frameType == 19)
@@ -691,6 +697,7 @@ void usage(UsageEnvironment& env, char const* progName)
   env << "  " << progName << " <option> <rtsp://usr:pwd@ip:port/path>\n";
   env << "\n";
   env << "Option:\n";
+  env << "  -d : debug info\n";
   env << "  -f fileName : write h264/h265 stream to file (default save to ./test.h26x)\n";
   env << "  -slave : write h264/h265 stream to stdout\n";
   env << "  -shm : backup h264/h265 data to share mem\n";
@@ -740,7 +747,11 @@ int main(int argc, char** argv)
   {
     param = argv[i];
     
-    if(strncmp(param, "-f", 2) == 0 && i + 1 < argc)
+    if(strncmp(param, "-d", 2) == 0)
+    {
+      main_pro.debug = true;
+    }
+    else if(strncmp(param, "-f", 2) == 0 && i + 1 < argc)
     {
       i += 1;
       memset(main_pro.tar_file_name, 0, sizeof(main_pro.tar_file_name));

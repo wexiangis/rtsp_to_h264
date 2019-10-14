@@ -77,12 +77,13 @@ pid_t process_open(char *cmd)
     return pid;
 }
 
-void process_close(pid_t pid)
+void process_close(pid_t *pid)
 {
     if(pid)
     {
-        if(waitpid(pid, NULL, WNOHANG|WUNTRACED) != pid)
-            kill(pid, SIGKILL);
+        if(waitpid(*pid, NULL, WNOHANG|WUNTRACED) != *pid)
+            kill(*pid, SIGKILL);
+        *pid = 0;
     }
 }
 
