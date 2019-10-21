@@ -56,7 +56,7 @@ pid_t process_rtspToH264(char *filePath, char *url)
     else if(pid == 0) //child process
     {
         execl(filePath, "rtspToH264", url, 
-            "-shm", "-f", "/dev/null", (char *)0);
+            "-shm", (char *)0);
         _exit(127);
     }
     return pid;
@@ -86,6 +86,5 @@ void process_close(pid_t *pid)
         *pid = 0;
     }
 }
-
 
 

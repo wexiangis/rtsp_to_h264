@@ -494,6 +494,8 @@ typedef struct{
   bool shm_mode;
 
   bool debug;
+  int frameType;
+  char head[4];
 }Main_Pro;
 
 static Main_Pro main_pro = {
@@ -515,6 +517,8 @@ static Main_Pro main_pro = {
   .shm_mode = 0,
 
   .debug = false,
+  .frameType = 0,
+  .head = {0x00, 0x00, 0x00, 0x01},
 };
 
 extern int h264_decode_sps(unsigned char * buf,unsigned int nLen,int *width,int *height,int *fps);
@@ -547,7 +551,7 @@ void DummySink::afterGettingFrame(
   //save to file
   // if(!strcmp(fSubsession.mediumName(), "video"))
   {
-
+    //写数据到共享内存
     if(main_pro.shm_dat)
     {
         if(main_pro.shm_dat->ready)
@@ -560,47 +564,53 @@ void DummySink::afterGettingFrame(
 
     if(main_pro.stepCount == 0)
     {
+      //流类型判断
+      if(strstr(fSubsession.codecName(), "265"))
+        main_pro.isH264 = false;
+      else if(strstr(fSubsession.codecName(), "264"))
+        main_pro.isH264 = true;
+      //fp准备
       if(main_pro.slave_mode)
         main_pro.fp = stdout;
-      else
+      else if(main_pro.tar_file_name[0])
       {
-        if(strstr(fSubsession.codecName(), "265"))
-        {
-          strcpy(&main_pro.tar_file_name[strlen(main_pro.tar_file_name)], ".h265");
-          main_pro.fp = fopen(main_pro.tar_file_name, "w");
-          // main_pro.fp = fopen(main_pro.tar_file_name, "a+b");
-          main_pro.isH264 = false;
-        }
-        else if(strstr(fSubsession.codecName(), "264"))
+        if(main_pro.isH264)
         {
           strcpy(&main_pro.tar_file_name[strlen(main_pro.tar_file_name)], ".h264");
           main_pro.fp = fopen(main_pro.tar_file_name, "w");
           // main_pro.fp = fopen(main_pro.tar_file_name, "a+b");
-          main_pro.isH264 = true;
+        }
+        else
+        {
+          strcpy(&main_pro.tar_file_name[strlen(main_pro.tar_file_name)], ".h265");
+          main_pro.fp = fopen(main_pro.tar_file_name, "w");
+          // main_pro.fp = fopen(main_pro.tar_file_name, "a+b");
         }
       }
+      //不再进入该段内容
       main_pro.stepCount += 1;
     }
 
-    int frameType = 0;
+    //是否要补上头4字节?是则设置偏移量为4
+    main_pro.frameType = 0;
+    if(*((int*)fReceiveBuffer) == 0x1000000) // head == 00,00,00,01 ?
+      main_pro.frameType = 4;
+
+    //写文件
     if(main_pro.fp)
     {
-      if(*((int*)fReceiveBuffer) != 0x1000000) // head == 00,00,00,01 ?
-      {
-        char head[4] = {0x00, 0x00, 0x00, 0x01};
-        fwrite(head, 4, 1, main_pro.fp);
-      }
-      else
-        frameType = 4;
+      if(main_pro.frameType == 0)
+        fwrite(main_pro.head, 4, 1, main_pro.fp);
       fwrite(fReceiveBuffer, frameSize, 1, main_pro.fp);
     }
 
+    //截取SPS帧,解析视频宽/高信息
     if(main_pro.stepCount == 1)
     {
       if(main_pro.isH264)
       {
-        frameType = fReceiveBuffer[frameType]&0x1F;
-        if(frameType == 7)
+        main_pro.frameType = fReceiveBuffer[main_pro.frameType]&0x1F;
+        if(main_pro.frameType == 7)
         {
           int width = 0, height = 0, fps = 0;
           if(h264_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
@@ -623,23 +633,24 @@ void DummySink::afterGettingFrame(
                     << " P-frame/" << main_pro.cP 
                     << " B-frame/" << main_pro.cB
                     << "\n";
+            //不再进入该段内容
             if(!main_pro.debug)
               main_pro.stepCount += 1;
           }
         }
-        else if(frameType == 5)
+        else if(main_pro.frameType == 5)
         {
           main_pro.cI += 1;
           main_pro.cP = 0;
           main_pro.cB = 0;
         }
-        else if(frameType == 1)
+        else if(main_pro.frameType == 1)
           main_pro.cP += 1;
       }
       else
       {
-        frameType = (fReceiveBuffer[frameType]&0x7E)>>1;
-        if(frameType == 33)
+        main_pro.frameType = (fReceiveBuffer[main_pro.frameType]&0x7E)>>1;
+        if(main_pro.frameType == 33)
         {
           int width = 0, height = 0, fps = 0;
           if(h265_decode_sps(fReceiveBuffer,frameSize,&width,&height,&fps))
@@ -662,17 +673,18 @@ void DummySink::afterGettingFrame(
                     << " P-frame/" << main_pro.cP 
                     << " B-frame/" << main_pro.cB
                     << "\n";
+            //不再进入该段内容
             if(!main_pro.debug)
               main_pro.stepCount += 1;
           }
         }
-        else if(frameType == 19)
+        else if(main_pro.frameType == 19)
         {
           main_pro.cI += 1;
           main_pro.cP = 0;
           main_pro.cB = 0;
         }
-        else if(frameType == 1)
+        else if(main_pro.frameType == 1)
           main_pro.cP += 1;
       }
     }
@@ -683,6 +695,7 @@ void DummySink::afterGettingFrame(
       else
         main_pro.shm_dat->type = 2;
     }
+
   }
   // Then continue, to request the next frame of data:
   continuePlaying();
@@ -698,7 +711,7 @@ void usage(UsageEnvironment& env, char const* progName)
   env << "\n";
   env << "Option:\n";
   env << "  -d : debug info\n";
-  env << "  -f fileName : write h264/h265 stream to file (default save to ./test.h26x)\n";
+  env << "  -f fileName : write h264/h265 stream to file\n";
   env << "  -slave : write h264/h265 stream to stdout\n";
   env << "  -shm : backup h264/h265 data to share mem\n";
   env << "         total size : 512*1024=524288 bytes\n";
@@ -732,7 +745,6 @@ int main(int argc, char** argv)
   // 解析传参
   char *param;
   int i;
-  strcpy(main_pro.tar_file_name, "test");
   strcpy(main_pro.shm_path, "/tmp");
   strcpy(main_pro.shm_flag, "s");
 
