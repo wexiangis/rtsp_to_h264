@@ -23,6 +23,64 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 #include "liveMedia.hh"
 #include "BasicUsageEnvironment.hh"
 
+#include "shmem.h"
+
+typedef struct{
+  char stepCount;
+  int cI, cB, cP;
+  bool isH264;
+
+  FILE *fp;
+  char tar_file_name[128];
+
+  bool slave_mode;//从机模式,连接后从stdout吐帧数据,可用重定向'>>'来写到文件
+
+  int shm_fd;
+  ShmData_Struct *shm_dat;
+  char shm_path[64];
+  char shm_flag[2];
+  bool shm_mode;
+
+  bool debug;
+  int frameType;
+  char head[4];
+
+  RTSPClient* rtspClient;
+  unsigned int rtspClientCount;
+
+  char argv0[128];
+  char argvX[128];
+}Main_Pro;
+
+static Main_Pro main_pro = {
+  .stepCount = 0,
+  .cI = 0,
+  .cB = 0,
+  .cP = 0,
+  .isH264 = false,
+
+  .fp = NULL,
+  .tar_file_name = {0},//"test",
+
+  .slave_mode = false,
+
+  .shm_fd = 0,
+  .shm_dat = NULL,
+  .shm_path = {0},//"/tmp",
+  .shm_flag = {0},//"s",
+  .shm_mode = 0,
+
+  .debug = false,
+  .frameType = 0,
+  .head = {0x00, 0x00, 0x00, 0x01},
+
+  .rtspClient = NULL,
+  .rtspClientCount = 0,
+
+  .argv0 = {0},
+  .argvX = {0},
+};
+
 // Forward function definitions:
 
 // RTSP 'response handlers':
@@ -83,6 +141,8 @@ public:
 				  char const* applicationName = NULL,
 				  portNumBits tunnelOverHTTPPortNum = 0);
 
+  void reconnect();
+
 protected:
   ourRTSPClient(UsageEnvironment& env, char const* rtspURL,
 		int verbosityLevel, char const* applicationName, portNumBits tunnelOverHTTPPortNum);
@@ -126,25 +186,23 @@ private:
   char* fStreamId;
 };
 
-#define RTSP_CLIENT_VERBOSITY_LEVEL 1 // by default, print verbose output from each "RTSPClient"
-
-static unsigned rtspClientCount = 0; // Counts how many streams (i.e., "RTSPClient"s) are currently in use.
+#define RTSP_CLIENT_VERBOSITY_LEVEL 0 // by default, print verbose output from each "RTSPClient"
 
 void openURL(UsageEnvironment& env, char const* progName, char const* rtspURL) {
   // Begin by creating a "RTSPClient" object.  Note that there is a separate "RTSPClient" object for each stream that we wish
   // to receive (even if more than stream uses the same "rtsp://" URL).
-  RTSPClient* rtspClient = ourRTSPClient::createNew(env, rtspURL, RTSP_CLIENT_VERBOSITY_LEVEL, progName);
-  if (rtspClient == NULL) {
+  main_pro.rtspClient = ourRTSPClient::createNew(env, rtspURL, RTSP_CLIENT_VERBOSITY_LEVEL, progName);
+  if (main_pro.rtspClient == NULL) {
     env << "Failed to create a RTSP client for URL \"" << rtspURL << "\": " << env.getResultMsg() << "\n";
     return;
   }
 
-  ++rtspClientCount;
+  ++main_pro.rtspClientCount;
 
   // Next, send a RTSP "DESCRIBE" command, to get a SDP description for the stream.
   // Note that this command - like all RTSP commands - is sent asynchronously; we do not block, waiting for a response.
   // Instead, the following function call returns immediately, and we handle the RTSP response later, from within the event loop:
-  rtspClient->sendDescribeCommand(continueAfterDESCRIBE); 
+  main_pro.rtspClient->sendDescribeCommand(continueAfterDESCRIBE); 
 }
 
 
@@ -391,11 +449,11 @@ void shutdownStream(RTSPClient* rtspClient, int exitCode) {
   Medium::close(rtspClient);
     // Note that this will also cause this stream's "StreamClientState" structure to get reclaimed.
 
-  if (--rtspClientCount == 0) {
+  if (--main_pro.rtspClientCount == 0) {
     // The final stream has ended, so exit the application now.
     // (Of course, if you're embedding this code into your own application, you might want to comment this out,
     // and replace it with "eventLoopWatchVariable = 1;", so that we leave the LIVE555 event loop, and continue running "main()".)
-    exit(exitCode);
+    // exit(exitCode);
   }
 }
 
@@ -415,6 +473,10 @@ ourRTSPClient::ourRTSPClient(UsageEnvironment& env, char const* rtspURL,
 ourRTSPClient::~ourRTSPClient() {
 }
 
+void ourRTSPClient::reconnect()
+{
+  reset();
+}
 
 // Implementation of "StreamClientState":
 
@@ -438,7 +500,7 @@ StreamClientState::~StreamClientState() {
 
 // Even though we're not going to be doing anything with the incoming data, we still need to receive it.
 // Define the size of the buffer that we'll use:
-#define DUMMY_SINK_RECEIVE_BUFFER_SIZE 524276 //512*1024=524288 - 12
+#define DUMMY_SINK_RECEIVE_BUFFER_SIZE 524275 //512*1024=524288 - 13
 
 DummySink* DummySink::createNew(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId) {
   return new DummySink(env, subsession, streamId);
@@ -474,52 +536,6 @@ Boolean DummySink::continuePlaying() {
 
 
 //---------------------------------------- 分割线 ----------------------------------------
-
-#include "shmem.h"
-
-typedef struct{
-  char stepCount;
-  int cI, cB, cP;
-  bool isH264;
-
-  FILE *fp;
-  char tar_file_name[128];
-
-  bool slave_mode;//从机模式,连接后从stdout吐帧数据,可用重定向'>>'来写到文件
-
-  int shm_fd;
-  ShmData_Struct *shm_dat;
-  char shm_path[64];
-  char shm_flag[2];
-  bool shm_mode;
-
-  bool debug;
-  int frameType;
-  char head[4];
-}Main_Pro;
-
-static Main_Pro main_pro = {
-  .stepCount = 0,
-  .cI = 0,
-  .cB = 0,
-  .cP = 0,
-  .isH264 = false,
-
-  .fp = NULL,
-  .tar_file_name = {0},//"test",
-
-  .slave_mode = false,
-
-  .shm_fd = 0,
-  .shm_dat = NULL,
-  .shm_path = {0},//"/tmp",
-  .shm_flag = {0},//"s",
-  .shm_mode = 0,
-
-  .debug = false,
-  .frameType = 0,
-  .head = {0x00, 0x00, 0x00, 0x01},
-};
 
 extern int h264_decode_sps(unsigned char * buf,unsigned int nLen,int *width,int *height,int *fps);
 extern int h265_decode_sps(unsigned char * buf,unsigned int nLen,int *width,int *height,int *fps);
@@ -717,14 +733,15 @@ void usage(UsageEnvironment& env, char const* progName)
   env << "         total size : 512*1024=524288 bytes\n";
   env << "         ---------- format ----------\n";
   env << "         offset len : describe\n";
-  env << "          [0]    1  : type 0/unknow 1/h264 2/h265\n";
-  env << "          [1]    2  : width (Little-Endian)\n";
-  env << "          [3]    2  : height (Little-Endian)\n";
-  env << "          [5]    1  : fps\n";
-  env << "          [6]    1  : ready 0/free 1/data ready\n";
-  env << "          [7]    1  : order loop 0~255\n";
-  env << "          [8]    4  : data len (Little-Endian)\n";
-  env << "          [12] 524276 : data\n";
+  env << "          [0]    1  : ctrl 0/free 1/restart 2/exit\n";
+  env << "          [1]    1  : type 0/unknow 1/h264 2/h265\n";
+  env << "          [2]    2  : width (Little-Endian)\n";
+  env << "          [4]    2  : height (Little-Endian)\n";
+  env << "          [6]    1  : fps\n";
+  env << "          [7]    1  : ready 0/free 1/data ready\n";
+  env << "          [8]    1  : order loop 0~255\n";
+  env << "          [9]    4  : data len (Little-Endian)\n";
+  env << "          [13] 524275 : data\n";
   env << "  -shm_path path : share mem ipc_path (default: " << main_pro.shm_path << ")\n";
   env << "  -shm_flag id : share mem ipc_flag (default: '" << main_pro.shm_flag << "')\n";
   env << "\n";
@@ -734,6 +751,48 @@ void usage(UsageEnvironment& env, char const* progName)
   env << "  " << progName << " rtsp://192.168.1.2/test -f ./test\n";
   env << "  " << progName << " rtsp://192.168.1.2/test -slave >> ./test.h264\n";
   env << "\n";
+}
+
+#include <signal.h>
+void signal_kill_callback(int sig)
+{
+  printf("--->> rtspToH264: shutdownStream now <<--- %d\n", sig);
+  shutdownStream(main_pro.rtspClient, 0);
+  if(main_pro.shm_fd)
+    shm_destroy(main_pro.shm_fd);
+  printf("--->> rtspToH264: Exit now <<---\n");
+  exit(0);
+}
+
+#include <pthread.h>
+void *shm_circle_check(void *argv)
+{
+  UsageEnvironment* env = (UsageEnvironment*)argv;
+  if(main_pro.shm_dat)
+    main_pro.shm_dat->ctrl = 0;
+  while(main_pro.shm_dat)
+  {
+    usleep(200000);
+    if(main_pro.shm_dat->ctrl)
+    {
+      if(main_pro.shm_dat->ctrl == 1)//restart
+      {
+        *env << "rtspToH264: shm ctrl -> restart\n";
+        if(main_pro.rtspClient)
+        {
+          // shutdownStream(main_pro.rtspClient, 0);
+          ((ourRTSPClient*)(main_pro.rtspClient))->reconnect();
+        }
+        openURL(*env, main_pro.argv0, main_pro.argvX);
+      }
+      else if(main_pro.shm_dat->ctrl == 2)//exit
+      {
+        *env << "rtspToH264: shm ctrl -> exit\n";
+        signal_kill_callback(0);
+      }
+      main_pro.shm_dat->ctrl = 0;
+    }
+  }
 }
 
 int main(int argc, char** argv)
@@ -796,6 +855,11 @@ int main(int argc, char** argv)
     else //if(strstr(param, "rtsp"))
     {
       openURL(*env, argv[0], argv[i]);
+      //
+      memset(main_pro.argv0, 0, sizeof(main_pro.argv0));
+      memset(main_pro.argvX, 0, sizeof(main_pro.argvX));
+      strcpy(main_pro.argv0, argv[0]);
+      strcpy(main_pro.argvX, argv[i]);
     }
   }
 
@@ -805,10 +869,17 @@ int main(int argc, char** argv)
     *env << "shm: size " << (int)sizeof(ShmData_Struct) 
       << " path " << main_pro.shm_path 
       << " flag '" << main_pro.shm_flag << "'\n";
-    main_pro.shm_fd = shm_create(main_pro.shm_path, main_pro.shm_flag[0], sizeof(ShmData_Struct), 1, (void**)&main_pro.shm_dat);
+    main_pro.shm_fd = shm_create(main_pro.shm_path, main_pro.shm_flag[0], sizeof(ShmData_Struct), (void**)&main_pro.shm_dat);
     if(main_pro.shm_dat)
       main_pro.shm_dat->type = 0;
+    
+    pthread_t th;
+    pthread_create(&th, NULL, shm_circle_check, (void*)env);
   }
+
+  signal(SIGINT, signal_kill_callback);
+  signal(SIGKILL, signal_kill_callback);
+  signal(SIGUSR1, signal_kill_callback);
 
   // There are argc-1 URLs: argv[1] through argv[argc-1].  Open and start streaming each one:
   // for (int i = 1; i <= argc-1; ++i) {

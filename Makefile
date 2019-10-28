@@ -15,7 +15,7 @@ INC += -I$(RPATH)/libs/include/liveMedia
 INC += -I$(RPATH)/libs/include/groupsock
 INC += -I$(RPATH)/libs/include/UsageEnvironment
 LIB += -L$(RPATH)/libs/lib
-CFLAGS += -lliveMedia -lgroupsock -lBasicUsageEnvironment -lUsageEnvironment
+CFLAGS += -lliveMedia -lgroupsock -lBasicUsageEnvironment -lUsageEnvironment -lpthread
 
 target:
 	@$(CXX) -O3 -Wall -o demo $(RPATH)/rtsp_to_h264.cpp $(RPATH)/h26x_sps_dec.c $(RPATH)/shmem.c $(INC) $(LIB) $(CFLAGS)
