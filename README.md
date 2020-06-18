@@ -1,6 +1,6 @@
 
-# build libs
+# 编译依赖库
 make live555
-# build demo
+# 编译
 make
 
